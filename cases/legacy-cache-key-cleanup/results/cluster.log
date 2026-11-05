@@ -1,0 +1,74 @@
+# 跑于 2026-11-05 15:32:53 +0800 | 服务端 7.4.12 | 镜像 redis:7.4.12-alpine@sha256:8da19c7399dca900c6822a1cf30f9d2285585e2c4b457ff4095b0f4500054d3f | lab 0547522 | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB
+
+== cluster 里 -n 3：打一行错误，命令照常执行
+redis-cli -n 3 PING → stderr: SELECT 3 failed: ERR SELECT is not allowed in cluster mode / stdout: PONG
+[符合] stderr：SELECT 3 failed: ERR SELECT is not allowed in cluster mode
+[符合] stdout：PONG
+
+== cleanup.sh 带单机时的库号 3 跑 cluster 节点：开头的检查拦下
+连接或选库失败，未做任何操作：SELECT 3 failed: ERR SELECT is not allowed in cluster mode
+[符合] 什么都没做就退出：1 连接或选库失败，未做任何操作：SELECT 3 failed: ERR SELECT is not allowed in cluster mode
+
+== 逐个主节点 inventory（SCAN 只遍历本节点）
+--- 192.168.107.4:6379
+redis: redis_version:7.4.12  db=0  2026-11-05T07:32:55Z
+before: db0:keys=994,expires=1,avg_ttl=3599926,subexpiry=0
+clients on db0: 1
+prefix / ttl / count:
+    993 Users no-ttl
+      1 my-service:Users ttl
+--- 192.168.107.3:6379
+redis: redis_version:7.4.12  db=0  2026-11-05T07:32:55Z
+before: db0:keys=1006,expires=3,avg_ttl=3599900,subexpiry=0
+clients on db0: 1
+prefix / ttl / count:
+   1001 Users no-ttl
+      2 other-app no-ttl
+      2 my-service:users ttl
+      1 Users ttl
+--- 192.168.107.2:6379
+redis: redis_version:7.4.12  db=0  2026-11-05T07:32:55Z
+before: db0:keys=1006,expires=0,avg_ttl=0,subexpiry=0
+clients on db0: 1
+prefix / ttl / count:
+   1006 Users no-ttl
+[符合] 各节点的 Users: 旧 key：993 1001 1006
+[符合] 加起来：3000
+
+== --cluster call：每个主节点的 INFO keyspace
+192.168.107.2:6379: # Keyspace
+db0:keys=1006,expires=0,avg_ttl=0,subexpiry=0
+192.168.107.4:6379: # Keyspace
+db0:keys=994,expires=1,avg_ttl=3599692,subexpiry=0
+192.168.107.3:6379: # Keyspace
+db0:keys=1006,expires=3,avg_ttl=3599791,subexpiry=0
+[符合] keys / expires：db0:keys=1006,expires=0|db0:keys=1006,expires=3|db0:keys=994,expires=1
+
+== Users:1 所在的 slot 设成 MIGRATING，在源节点上跑 run
+slot 174：rlab-legacy-c1 → rlab-legacy-c2
+redis: redis_version:7.4.12  db=0  2026-11-05T07:32:56Z
+before: db0:keys=1006,expires=0,avg_ttl=0,subexpiry=0
+ApiKeys:*                                matched=0      no-ttl=0      unlinked=0
+my-service:ApiKeys:*                     matched=0      no-ttl=0      unlinked=0
+Credentials:*                            matched=0      no-ttl=0      unlinked=0
+my-service:Credentials:*                 matched=0      no-ttl=0      unlinked=0
+EVAL failed on Users:*: ERR Script attempted to access a non local key in a cluster node script: 5b74e86c7b81e5ce82dbcd85f7b6ffdf98eb9585, on @user_script:6.
+源节点 DBSIZE：1006 → 973
+[符合] Users:* 那一轮 EVAL 报错退出：1 EVAL failed on Users:*: ERR Script attempted to access a non local key in a cluster node script
+[符合] 报错前已经 UNLINK 的不回滚（源节点上只有 Users: 旧 key）：1006 → 973
+[符合] 触发报错的 Users:1 还在源节点上：1
+
+== slot 恢复 STABLE 后逐个主节点重跑
+--- 192.168.107.4:6379 (rlab-legacy-c3)
+before: db0:keys=994,expires=1,avg_ttl=3599035,subexpiry=0
+Users:*                                  matched=993    no-ttl=993    unlinked=993
+after:  db0:keys=1,expires=1,avg_ttl=3598809,subexpiry=0
+--- 192.168.107.3:6379 (rlab-legacy-c2)
+before: db0:keys=1006,expires=3,avg_ttl=3599191,subexpiry=0
+Users:*                                  matched=1002   no-ttl=1001   unlinked=1001
+after:  db0:keys=5,expires=3,avg_ttl=3598959,subexpiry=0
+--- 192.168.107.2:6379 (rlab-legacy-c1)
+before: db0:keys=973,expires=0,avg_ttl=0,subexpiry=0
+Users:*                                  matched=973    no-ttl=973    unlinked=973
+after:  db0: (empty)
+[符合] 三个节点上剩下的 key：Users:ttl my-service:Users:1 my-service:users:v1:1 my-service:users:v1:2 other-app:counter other-app:lock

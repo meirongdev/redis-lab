@@ -1,0 +1,71 @@
+# 跑于 2026-11-05 15:32:46 +0800 | 服务端 7.4.2 | 镜像 redis:7.4.2-alpine@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952 | lab 0547522 | 机器 Apple M2 Pro（12 核 / 32 GiB），Docker 12 CPU / 15.7 GiB
+
+== 库号写错时，redis-cli 打一行错误，然后在 db 0 上执行
+redis-cli -n 20 EXISTS Users:1 → stderr: SELECT 20 failed: ERR DB index is out of range / stdout: 1
+[符合] stderr 只有一行错误：SELECT 20 failed: ERR DB index is out of range
+[符合] 命令照常执行，查到的是 db 0 的 Users:1：1
+
+== cleanup.sh 用库号 20 跑：开头的检查拦下
+连接或选库失败，未做任何操作：SELECT 20 failed: ERR DB index is out of range
+[符合] 什么都没做就退出：1 连接或选库失败，未做任何操作：SELECT 20 failed: ERR DB index is out of range
+[符合] db 0 的 Users:1 还在：1
+
+== inventory
+redis: redis_version:7.4.2  db=3  2026-11-05T07:32:46Z
+before: db3:keys=1204,expires=2,avg_ttl=3599906,subexpiry=0
+clients on db3: 1
+prefix / ttl / count:
+   1201 Users no-ttl
+      1 other-app no-ttl
+      1 my-service:users ttl
+      1 Users ttl
+[符合] 前缀统计：1 Users ttl|1 my-service:users ttl|1 other-app no-ttl|1201 Users no-ttl
+
+== dry
+redis: redis_version:7.4.2  db=3  2026-11-05T07:32:47Z
+ApiKeys:*                                matched=0      no-ttl=0      unlinked=0
+my-service:ApiKeys:*                     matched=0      no-ttl=0      unlinked=0
+Credentials:*                            matched=0      no-ttl=0      unlinked=0
+my-service:Credentials:*                 matched=0      no-ttl=0      unlinked=0
+Users:*                                  matched=1202   no-ttl=1201   unlinked=0
+my-service:Users:*                       matched=0      no-ttl=0      unlinked=0
+Tokens:*                                 matched=0      no-ttl=0      unlinked=0
+my-service:Tokens:*                      matched=0      no-ttl=0      unlinked=0
+Currencies:*                             matched=0      no-ttl=0      unlinked=0
+my-service:Currencies:*                  matched=0      no-ttl=0      unlinked=0
+Products:*                               matched=0      no-ttl=0      unlinked=0
+my-service:Products:*                    matched=0      no-ttl=0      unlinked=0
+CurrencyMappings:*                       matched=0      no-ttl=0      unlinked=0
+my-service:CurrencyMappings:*            matched=0      no-ttl=0      unlinked=0
+[符合] Users:* 只统计不删：Users:* matched=1202 no-ttl=1201 unlinked=0
+14 个模式一共 42 次 EVAL
+[符合] SCAN 要分几步才走完一遍（EVAL 次数多于模式数）：yes
+
+== run confirm
+redis: redis_version:7.4.2  db=3  2026-11-05T07:32:49Z
+before: db3:keys=1204,expires=2,avg_ttl=3599446,subexpiry=0
+ApiKeys:*                                matched=0      no-ttl=0      unlinked=0
+my-service:ApiKeys:*                     matched=0      no-ttl=0      unlinked=0
+Credentials:*                            matched=0      no-ttl=0      unlinked=0
+my-service:Credentials:*                 matched=0      no-ttl=0      unlinked=0
+Users:*                                  matched=1202   no-ttl=1201   unlinked=1201
+my-service:Users:*                       matched=0      no-ttl=0      unlinked=0
+Tokens:*                                 matched=0      no-ttl=0      unlinked=0
+my-service:Tokens:*                      matched=0      no-ttl=0      unlinked=0
+Currencies:*                             matched=0      no-ttl=0      unlinked=0
+my-service:Currencies:*                  matched=0      no-ttl=0      unlinked=0
+Products:*                               matched=0      no-ttl=0      unlinked=0
+my-service:Products:*                    matched=0      no-ttl=0      unlinked=0
+CurrencyMappings:*                       matched=0      no-ttl=0      unlinked=0
+my-service:CurrencyMappings:*            matched=0      no-ttl=0      unlinked=0
+after:  db3:keys=3,expires=2,avg_ttl=3599188,subexpiry=0
+prefix / ttl / count:
+      1 other-app no-ttl
+      1 my-service:users ttl
+      1 Users ttl
+[符合] Users:* 删掉没有 TTL 的：Users:* matched=1202 no-ttl=1201 unlinked=1201
+[符合] db 3 剩下的 key：Users:ttl my-service:users:v1:1 other-app:lock
+[符合] db 0 的 Users:1 还在：1
+slowlog-log-slower-than: 10000
+cmdstat_eval:calls=25,usec=7392,usec_per_call=295.68,rejected_calls=0,failed_calls=0
+[符合] 没有一次 EVAL 超过 10 ms（SLOWLOG LEN）：0
